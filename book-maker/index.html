@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1B2A41">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Book Maker – scans to a page-turning HTML book</title>
+<style>
+  :root{--navy:#1B2A41;--ink:#1d2433;--muted:#5d6678;--line:#d9dee7;--accent:#C0392B;--bg:#f6f7fa}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;color:var(--ink);background:var(--bg)}
+  header{background:var(--navy);color:#fff;padding:18px 28px}
+  header h1{margin:0;font-size:24px}
+  header p{margin:4px 0 0;color:#c8d2e3;font-size:14px}
+  main{max-width:1200px;margin:0 auto;padding:20px 28px 60px}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  .row{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  label{font-size:14px;color:var(--muted)}
+  input[type=text]{font-size:16px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;width:min(520px,100%)}
+  select,input[type=color]{font-size:14px;padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  button{font-size:15px;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:pointer}
+  button:hover{background:#eef1f6}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:bold}
+  button.primary:hover{background:#a93226}
+  button:disabled{opacity:.5;cursor:default}
+  #drop{border:2px dashed #aab4c5;border-radius:12px;padding:26px;text-align:center;color:var(--muted);background:#fbfcfe}
+  #drop.over{border-color:var(--accent);background:#fff4f2}
+  #drop strong{color:var(--ink)}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px;margin-top:6px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px;position:relative;cursor:grab}
+  .card.dragging{opacity:.4}
+  .card.target{outline:3px solid var(--accent)}
+  .thumb{height:120px;display:flex;align-items:center;justify-content:center;background:var(--navy);border-radius:6px;overflow:hidden}
+  .thumb img{max-width:100%;max-height:100%;transition:transform .2s}
+  .num{position:absolute;z-index:1;top:12px;left:12px;background:var(--accent);color:#fff;font-weight:bold;font-size:13px;border-radius:999px;padding:2px 8px}
+  .name{font-size:12px;color:var(--muted);margin:6px 2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tools{display:flex;gap:4px;justify-content:space-between}
+  .tools button{padding:3px 0;font-size:14px;flex:1}
+  #status{font-size:14px;color:var(--muted);min-height:20px}
+  .hint{font-size:13px;color:var(--muted);margin:8px 0 0}
+  progress{width:260px;height:14px}
+</style></head>
+<body>
+<header>
+  <h1>Book Maker</h1>
+  <p>Turn a set of scanned pages into one page-turning HTML file. Everything happens on this computer; nothing is uploaded.</p>
+</header>
+<main>
+  <div class="panel">
+    <div id="drop">
+      <strong>Drop scanned pages here</strong> or
+      <button id="pickFiles">Choose images…</button>
+      <button id="pickFolder">Choose a folder…</button>
+      <p class="hint">JPG or PNG. Pages are sorted by file name (00, 01, 02 … and “5b” lands between 05 and 06). Drag the cards to change the order.</p>
+      <input type="file" id="files" accept="image/*" multiple hidden>
+      <input type="file" id="folder" webkitdirectory multiple hidden>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <label for="title">Book title</label>
+      <input type="text" id="title" placeholder="e.g. Frosty the Snowman">
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label for="size">Image size</label>
+      <select id="size">
+        <option value="1400">Small (lightest file)</option>
+        <option value="1920" selected>Standard (good for projectors)</option>
+        <option value="2600">Large (sharpest zoom)</option>
+      </select>
+      <label for="bg">Background</label>
+      <input type="color" id="bg" value="#1B2A41">
+      <button id="clear">Clear all pages</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <div id="status">No pages yet.</div>
+      <div class="row">
+        <progress id="prog" value="0" max="1" hidden></progress>
+        <button id="preview" disabled>Preview</button>
+        <button id="save" class="primary" disabled>Save book (.html)</button>
+      </div>
+    </div>
+    <div id="grid"></div>
+  </div>
+</main>
+
+<script>
+// ---------- page list ----------
+let pages = []; // {file, name, url, rot}
+const grid = document.getElementById('grid'), statusEl = document.getElementById('status');
+const titleEl = document.getElementById('title');
+const natural = (a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: 'base'});
+
+function addFiles(list){
+  const imgs = [...list].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|bmp)$/i.test(f.name));
+  if (!imgs.length) return;
+  imgs.forEach(f => pages.push({file: f, name: f.name, url: URL.createObjectURL(f), rot: 0}));
+  pages.sort((a, b) => natural(a.name, b.name));
+  if (!titleEl.value.trim()) titleEl.value = guessTitle(pages.map(p => p.name));
+  render();
+}
+function guessTitle(names){
+  const stem = n => n.replace(/\.[^.]+$/, '');
+  let pre = stem(names[0]);
+  for (const n of names) { const s = stem(n); let k = 0; while (k < pre.length && pre[k] === s[k]) k++; pre = pre.slice(0, k); }
+  pre = pre.replace(/[\d_\-\s]+$/, '').replace(/[_\-]+/g, ' ').trim();
+  return pre;
+}
+function render(){
+  grid.innerHTML = '';
+  pages.forEach((p, i) => {
+    const c = document.createElement('div'); c.className = 'card'; c.draggable = true; c.dataset.i = i;
+    c.innerHTML = `<span class="num">${i === 0 ? 'Cover' : i}</span>
+      <div class="thumb"><img src="${p.url}" style="transform:rotate(${p.rot}deg)" alt=""></div>
+      <div class="name" title="${p.name}">${p.name}</div>
+      <div class="tools">
+        <button data-a="left" title="Move earlier">◀</button>
+        <button data-a="rot" title="Rotate 90°">↻</button>
+        <button data-a="del" title="Remove">✕</button>
+        <button data-a="right" title="Move later">▶</button>
+      </div>`;
+    c.querySelectorAll('button').forEach(b => b.onclick = e => { e.stopPropagation(); act(b.dataset.a, i); });
+    c.addEventListener('dragstart', () => { c.classList.add('dragging'); dragFrom = i; });
+    c.addEventListener('dragend', () => c.classList.remove('dragging'));
+    c.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('target'); });
+    c.addEventListener('dragleave', () => c.classList.remove('target'));
+    c.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); c.classList.remove('target');
+      if (dragFrom === null) return; const [m] = pages.splice(dragFrom, 1); pages.splice(i, 0, m); dragFrom = null; render(); });
+    grid.appendChild(c);
+  });
+  statusEl.textContent = pages.length ? `${pages.length} page${pages.length > 1 ? 's' : ''}: the first one is used as the cover.` : 'No pages yet.';
+  document.getElementById('save').disabled = document.getElementById('preview').disabled = !pages.length;
+}
+let dragFrom = null;
+function act(a, i){
+  if (a === 'left' && i > 0) [pages[i-1], pages[i]] = [pages[i], pages[i-1]];
+  if (a === 'right' && i < pages.length - 1) [pages[i+1], pages[i]] = [pages[i], pages[i+1]];
+  if (a === 'rot') pages[i].rot = (pages[i].rot + 90) % 360;
+  if (a === 'del') { URL.revokeObjectURL(pages[i].url); pages.splice(i, 1); }
+  render();
+}
+
+// ---------- inputs ----------
+const filesIn = document.getElementById('files'), folderIn = document.getElementById('folder');
+document.getElementById('pickFiles').onclick = () => filesIn.click();
+document.getElementById('pickFolder').onclick = () => folderIn.click();
+filesIn.onchange = () => { addFiles(filesIn.files); filesIn.value = ''; };
+folderIn.onchange = () => { addFiles(folderIn.files); folderIn.value = ''; };
+const drop = document.getElementById('drop');
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { if (dragFrom !== null) return; e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('over')));
+drop.addEventListener('drop', e => { if (dragFrom !== null) return; e.preventDefault(); addFiles(e.dataTransfer.files); });
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => { e.preventDefault(); if (dragFrom === null && e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+document.getElementById('clear').onclick = () => { pages.forEach(p => URL.revokeObjectURL(p.url)); pages = []; titleEl.value = ''; render(); };
+
+// ---------- build ----------
+async function shrink(p, maxSide){
+  const bmp = await createImageBitmap(p.file);
+  const side = p.rot % 180 !== 0;
+  const w0 = side ? bmp.height : bmp.width, h0 = side ? bmp.width : bmp.height;
+  const s = Math.min(1, maxSide / Math.max(w0, h0));
+  const cv = document.createElement('canvas'); cv.width = Math.round(w0 * s); cv.height = Math.round(h0 * s);
+  const ctx = cv.getContext('2d'); ctx.imageSmoothingQuality = 'high';
+  ctx.translate(cv.width / 2, cv.height / 2); ctx.rotate(p.rot * Math.PI / 180);
+  const dw = bmp.width * s, dh = bmp.height * s; ctx.drawImage(bmp, -dw / 2, -dh / 2, dw, dh);
+  bmp.close && bmp.close();
+  return cv.toDataURL('image/jpeg', 0.8);
+}
+async function buildBook(){
+  const prog = document.getElementById('prog'); prog.hidden = false; prog.max = pages.length; prog.value = 0;
+  const btns = [document.getElementById('save'), document.getElementById('preview')]; btns.forEach(b => b.disabled = true);
+  const maxSide = +document.getElementById('size').value, out = [];
+  try {
+    for (let i = 0; i < pages.length; i++) {
+      statusEl.textContent = `Preparing page ${i + 1} of ${pages.length}…`;
+      out.push(await shrink(pages[i], maxSide)); prog.value = i + 1;
+    }
+  } finally { prog.hidden = true; btns.forEach(b => b.disabled = false); }
+  const title = titleEl.value.trim() || 'Book';
+  const html = VIEWER.replace('__TITLE__', () => esc(title)).replace('__BG__', () => document.getElementById('bg').value)
+                     .replace('__PAGES__', () => JSON.stringify(out));
+  const mb = (html.length / 1e6).toFixed(1);
+  statusEl.textContent = `${pages.length} pages ready (${mb} MB).`;
+  return {html, title};
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+document.getElementById('preview').onclick = async () => {
+  const w = window.open('', '_blank'); // open now so the pop-up blocker allows it
+  const {html} = await buildBook();
+  const url = URL.createObjectURL(new Blob([html], {type: 'text/html'}));
+  if (w) w.location = url; else window.open(url, '_blank');
+};
+document.getElementById('save').onclick = async () => {
+  const {html, title} = await buildBook();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], {type: 'text/html'}));
+  a.download = title.replace(/[\\/:*?"<>|]+/g, '').trim() + '.html';
+  document.body.appendChild(a); a.click(); a.remove();
+  statusEl.textContent += ' Saved to your Downloads folder.';
+};
+
+// ---------- the viewer that goes inside each saved book ----------
+const VIEWER = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  html,body{margin:0;height:100%;background:__BG__;overflow:hidden;font-family:Arial,sans-serif;user-select:none}
+  #stage{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer}
+  #stage img{max-width:98vw;max-height:96vh;object-fit:contain;transition:transform .25s ease}
+  #stage.zoomed{cursor:zoom-out}
+  #bar{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;
+       background:rgba(0,0,0,.55);color:#fff;padding:6px 10px;border-radius:999px;font-size:15px;transition:opacity .4s}
+  #bar button{background:none;border:0;color:#fff;font-size:20px;cursor:pointer;padding:2px 8px;border-radius:6px}
+  #bar button:hover{background:rgba(255,255,255,.2)}
+  body.idle #bar{opacity:0} body.idle #stage{cursor:none}
+</style></head>
+<body>
+<div id="stage"><img id="pg" alt=""></div>
+<div id="bar"><button id="prev" title="Previous (←)">&#9664;</button><span id="count"></span>
+<button id="next" title="Next (→)">&#9654;</button><button id="fs" title="Full screen (F)">&#x26F6;</button></div>
+<script>
+const PAGES = __PAGES__;
+let i = 0, zoom = false;
+const img = document.getElementById('pg'), stage = document.getElementById('stage'), count = document.getElementById('count');
+function show(n){ i = Math.max(0, Math.min(PAGES.length-1, n)); unzoom(); img.src = PAGES[i];
+  img.alt = i === 0 ? 'Cover' : 'Page ' + i; count.textContent = (i+1) + ' / ' + PAGES.length;
+  [i+1, i-1].forEach(k => { if (PAGES[k]) { const p = new Image(); p.src = PAGES[k]; } }); }
+function unzoom(){ zoom = false; img.style.transform = ''; stage.classList.remove('zoomed'); }
+function next(){ show(i+1); } function prev(){ show(i-1); }
+document.getElementById('next').onclick = e => { e.stopPropagation(); next(); };
+document.getElementById('prev').onclick = e => { e.stopPropagation(); prev(); };
+document.getElementById('fs').onclick = e => { e.stopPropagation(); toggleFS(); };
+function toggleFS(){ document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+let clickTimer = null;
+stage.addEventListener('click', e => { if (clickTimer) return; clickTimer = setTimeout(() => { clickTimer = null;
+  if (zoom) { unzoom(); return; } (e.clientX < window.innerWidth/3) ? prev() : next(); }, 250); });
+stage.addEventListener('dblclick', e => { clearTimeout(clickTimer); clickTimer = null; if (zoom) { unzoom(); return; }
+  const r = img.getBoundingClientRect();
+  img.style.transformOrigin = ((e.clientX - r.left) / r.width * 100) + '% ' + ((e.clientY - r.top) / r.height * 100) + '%';
+  img.style.transform = 'scale(2.2)'; zoom = true; stage.classList.add('zoomed'); });
+document.addEventListener('keydown', e => {
+  if (['ArrowRight','PageDown',' ','Enter'].includes(e.key)) { e.preventDefault(); next(); }
+  else if (['ArrowLeft','PageUp','Backspace'].includes(e.key)) { e.preventDefault(); prev(); }
+  else if (e.key === 'Home') show(0); else if (e.key === 'End') show(PAGES.length-1);
+  else if (e.key === 'f' || e.key === 'F') toggleFS(); else if (e.key === 'Escape') unzoom(); });
+let tx = null;
+stage.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, {passive:true});
+stage.addEventListener('touchend', e => { if (tx === null || zoom) return; const dx = e.changedTouches[0].clientX - tx; tx = null;
+  if (Math.abs(dx) > 50) { dx < 0 ? next() : prev(); } });
+let idleT; function wake(){ document.body.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add('idle'), 2500); }
+['mousemove','keydown','touchstart'].forEach(ev => document.addEventListener(ev, wake)); wake();
+show(0);
+<\/script>
+</body></html>`;
+render();
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js');
+</script>
+</body></html>
